@@ -6,22 +6,13 @@ class Config:
     # --- Đường dẫn Dataset ---
     # FIX: đọc từ biến môi trường để chạy được cả trên Windows (local) lẫn Colab/Linux
     # mà không cần sửa code mỗi lần đổi máy. Giữ nguyên giá trị cũ làm default cho local Windows.
-    CLEAN_DATASET_ROOT = os.getenv(
-        "CLEAN_DATASET_ROOT", "D:/cuong_stt/assets/dts_test/clean_dataset"
-    )
-    CLEAN_PROMPTS_FILE = os.getenv(
-        "CLEAN_PROMPTS_FILE",
-        "D:/cuong_stt/assets/dts_test/clean_dataset/spk01_prompts.txt",
-    )
-    NOISE_DATASET_ROOT = os.getenv(
-        "NOISE_DATASET_ROOT", "D:/cuong_stt/assets/dts_test/noise_dataset"
-    )
+    CLEAN_DATASET_ROOT = "./assets/dts_test/clean_dataset"
+    CLEAN_PROMPTS_FILE = "./assets/dts_test/clean_dataset/spk01_prompts.txt"
+    NOISE_DATASET_ROOT = "./assets/dts_test/noise_dataset"
 
     # --- Đường dẫn Output ---
-    ARTIFACTS_OUTPUT_DIR = os.getenv(
-        "ARTIFACTS_OUTPUT_DIR", "./module/whisper_train/artifacts"
-    )
-    MODEL_OUTPUT_DIR = os.getenv("MODEL_OUTPUT_DIR", "./models")
+    ARTIFACTS_OUTPUT_DIR = "./module/whisper_train/artifacts"
+    MODEL_OUTPUT_DIR = "./models"
     
     # --- Thông số Audio & Text ---
     SAMPLE_RATE = 16000
