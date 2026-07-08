@@ -2,7 +2,6 @@
 
 ``` bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install pytorch-lightning transformers evaluate soundfile openai-whisper ctranslate2 tqdm numpy
 pip install pytorch-lightning transformers evaluate soundfile openai-whisper ctranslate2 tqdm numpy torchaudio
 ```
 

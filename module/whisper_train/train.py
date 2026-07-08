@@ -269,5 +269,5 @@ def convert(cfg):
 
 if __name__ == "__main__":
     cfg = Config()
-    # whisper_train(cfg)
+    whisper_train(cfg)
     convert(cfg)
