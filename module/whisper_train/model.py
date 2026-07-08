@@ -1,3 +1,5 @@
+import sys
+from pathlib import Path
 import torch
 from torch import nn
 import whisper
@@ -5,6 +7,10 @@ import evaluate
 from pytorch_lightning import LightningModule
 from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
+
+# FIX: cho phép import chạy đúng dù model.py được import từ cwd khác (vd: qua train.py
+# chạy từ repo root).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import Config
 from data_utils import SpeechDataset, WhisperDataCollatorWithPadding
@@ -77,7 +83,6 @@ class WhisperModelModule(LightningModule):
         loss = self.loss_fn(out.view(-1, out.size(-1)), batch["labels"].long().view(-1))
 
         out_ids = torch.argmax(out, dim=2)
-        out_ids[out_ids == -100] = self.tokenizer.eot
         labels_for_decode = batch["labels"].long().clone()
         labels_for_decode[labels_for_decode == -100] = self.tokenizer.eot
 
@@ -137,10 +142,12 @@ class WhisperModelModule(LightningModule):
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            self.t_total = (
+            # FIX: ép int tường minh thay vì để float ngầm định (num_train_epochs là float
+            # khi nhân vào, get_linear_schedule_with_warmup mong đợi num_training_steps là int).
+            self.t_total = int(
                 (len(self.__train_clean_pairs) // self.cfg.BATCH_SIZE)
                 // self.cfg.gradient_accumulation_steps
-                * float(self.cfg.num_train_epochs)
+                * self.cfg.num_train_epochs
             )
 
     def train_dataloader(self):
@@ -159,7 +166,7 @@ class WhisperModelModule(LightningModule):
             drop_last=True,
             shuffle=True,
             num_workers=self.cfg.num_worker,
-            collate_fn=WhisperDataCollatorWithPadding(),
+            collate_fn=WhisperDataCollatorWithPadding(pad_token_id=self.tokenizer.eot),
         )
 
     def val_dataloader(self):
@@ -176,5 +183,5 @@ class WhisperModelModule(LightningModule):
             dataset,
             batch_size=self.cfg.BATCH_SIZE,
             num_workers=self.cfg.num_worker,
-            collate_fn=WhisperDataCollatorWithPadding(),
+            collate_fn=WhisperDataCollatorWithPadding(pad_token_id=self.tokenizer.eot),
         )

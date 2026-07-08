@@ -1,9 +1,9 @@
 # Installation
 
 ``` bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install pytorch-lightning transformers evaluate soundfile openai-whisper ctranslate2 tqdm numpy torchaudio
+pip install -r requirements.txt
 ```
+
 
 ---
 
@@ -33,8 +33,15 @@ prepare dataset including wav file and prompt as labeling audio
 ---
 # Training
 
-```text
-Just run the train.py file
+``` bash
+# Chạy cả train + convert (mặc định)
+python module/whisper_train/train.py
+
+# Chỉ train
+python module/whisper_train/train.py --mode train
+
+# Chỉ convert checkpoint có sẵn (dùng checkpoint tốt nhất theo val/loss, đã ghi lại sau khi train)
+python module/whisper_train/train.py --mode convert
 ```
 ---
 

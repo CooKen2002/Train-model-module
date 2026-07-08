@@ -1,0 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch
+torchaudio
+pytorch-lightning
+transformers
+evaluate
+soundfile
+openai-whisper
+ctranslate2
+tqdm
+numpy

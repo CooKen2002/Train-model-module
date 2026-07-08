@@ -214,6 +214,10 @@ class SpeechDataset(torch.utils.data.Dataset):
     # Xử lý dữ liệu thời gian thực khi nạp mẫu thứ idx
     def __getitem__(self, idx):
         audio_path, text = self.clean_pairs[idx]
+        # FIX: dùng CHUNG 1 nguồn rng cho toàn bộ quyết định ngẫu nhiên của sample này
+        # (trước đây khi deterministic=False, việc chọn offset noise trong mix_with_noise
+        # lại dùng random.Random() mới không seed -> 2 nguồn random khác nhau, không sai
+        # logic nhưng khó trace/khó tái tạo lại kết quả khi debug).
         rng = random.Random(self.seed + idx) if self.deterministic else random
         clean = load_wave(audio_path, sample_rate=self.sample_rate).flatten()
 
@@ -225,7 +229,7 @@ class SpeechDataset(torch.utils.data.Dataset):
                 clean,
                 noise,
                 rng.uniform(*self.snr_db_range),
-                rng if self.deterministic else random.Random(),
+                rng,
             )
         else:
             audio = clean
@@ -242,6 +246,12 @@ class SpeechDataset(torch.utils.data.Dataset):
 
 
 class WhisperDataCollatorWithPadding:
+    # FIX: nhận pad_token_id (tokenizer.eot) từ bên ngoài thay vì hardcode 50257.
+    # 50257 chỉ đúng với tokenizer multilingual gốc (tiny/base/small/medium); các bản
+    # large-v3 dùng vocab khác (~51866 token, thêm token timestamp mới) nên eot id khác.
+    def __init__(self, pad_token_id: int):
+        self.pad_token_id = pad_token_id
+
     def __call__(self, features):
         # Gộp các ảnh phổ âm thanh thành một khối Tensor duy nhất (input_ids)
         input_ids = torch.concat([f["input_ids"][None, :] for f in features])
@@ -256,9 +266,9 @@ class WhisperDataCollatorWithPadding:
             np.pad(l, (0, max_len - len(l)), "constant", constant_values=-100)
             for l in labels
         ]
-        # Ma trận đầu vào dec_input_ids, các vị trí thiếu sẽ được điền mã số 50257
+        # Ma trận đầu vào dec_input_ids, các vị trí thiếu sẽ được điền pad_token_id (tokenizer.eot)
         dec_input_ids = [
-            np.pad(d, (0, max_len - len(d)), "constant", constant_values=50257)
+            np.pad(d, (0, max_len - len(d)), "constant", constant_values=self.pad_token_id)
             for d in dec_input_ids
         ]
         # Ép toàn bộ các mảng dữ liệu đã được đệm thành các Tensor PyTorch chính thống để sẵn sàng đẩy thẳng lên GPU xử lý song song

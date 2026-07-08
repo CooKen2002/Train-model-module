@@ -1,5 +1,8 @@
 import os
+import sys
 import glob
+import json
+import argparse
 import torch
 import whisper
 import ctranslate2.converters
@@ -9,9 +12,15 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
+# FIX: cho phép chạy `python train.py` từ bất kỳ đâu (vd: từ repo root) mà vẫn import
+# được config.py/model.py/data_utils.py nằm cùng thư mục với file này.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from data_utils import prepare_datasets
 from model import WhisperModelModule
 from config import Config
+
+BEST_CKPT_INFO_FILE = "best_checkpoint.json"
 
 
 def build_hf_config_from_openai_dims(dims: dict) -> WhisperConfig:
@@ -159,8 +168,9 @@ def whisper_train(cfg):
     # 4. Khởi tạo bộ điều khiển tối cao Trainer của PyTorch Lightning
     trainer = Trainer(
         precision=(
-            16 if cfg.DEVICE == "gpu" else 32
-        ),  # Nếu chạy GPU, bật FP16 (nửa độ chính xác) để giảm dung lượng VRAM và tăng tốc gấp đôi.
+            "16-mixed" if cfg.DEVICE == "gpu" else 32
+        ),  # FIX: PyTorch Lightning 2.x khuyến nghị chuỗi "16-mixed" thay vì số nguyên 16
+        # (int đã bị deprecate, dễ khác hành vi tuỳ version PL đang cài).
         accelerator=cfg.DEVICE,  # Chọn thiết bị phần cứng chạy
         max_epochs=cfg.num_train_epochs,  # Giới hạn số Epoch train
         accumulate_grad_batches=cfg.gradient_accumulation_steps,  # Gom bao nhiêu batch thì update trọng số 1 lần
@@ -174,6 +184,27 @@ def whisper_train(cfg):
     print("Bắt đầu quá trình huấn luyện...")
     trainer.fit(model)
 
+    # FIX (bug #1): lưu lại đường dẫn checkpoint TỐT NHẤT (val/loss thấp nhất) mà
+    # ModelCheckpoint đã chọn, thay vì để convert() phải đoán bằng cách sort tên file
+    # theo epoch (epoch mới nhất trong top-3 KHÔNG đồng nghĩa là loss thấp nhất).
+    best_path = checkpoint_callback.best_model_path
+    if best_path:
+        with open(f"{check_output_dir}/{BEST_CKPT_INFO_FILE}", "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "best_model_path": best_path,
+                    "best_model_score": float(checkpoint_callback.best_model_score)
+                    if checkpoint_callback.best_model_score is not None
+                    else None,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+        print("Checkpoint tốt nhất (val/loss thấp nhất):", best_path)
+    else:
+        print("[WARN] checkpoint_callback.best_model_path rỗng -- convert() sẽ fallback về checkpoint mới nhất.")
+
     print(
         "\nHoàn tất training. Checkpoint đã lưu tại:", f"{check_output_dir}"
     )
@@ -183,14 +214,33 @@ def convert(cfg):
     artifacts_output_dir = cfg.ARTIFACTS_OUTPUT_DIR
     models_output_dir = cfg.MODEL_OUTPUT_DIR
     checkpoint_dir = f"{artifacts_output_dir}/checkpoints"
-    # Tìm kiếm tất cả các file checkpoint .ckpt trong thư mục, sắp xếp để lấy file mới nhất/tốt nhất
-    available_ckpts = sorted(glob.glob(f"{checkpoint_dir}/*.ckpt", recursive=True))
 
-    if not available_ckpts:
-        print(f"Không tìm thấy checkpoint nào trong {checkpoint_dir}!")
-        return
+    # FIX (bug #1): ưu tiên đọc checkpoint TỐT NHẤT (val/loss thấp nhất) đã được
+    # whisper_train() ghi lại vào best_checkpoint.json. Trước đây code lấy checkpoint
+    # cuối cùng theo thứ tự sort tên file (epoch lớn nhất trong top-3 đã lưu), điều này
+    # KHÔNG đảm bảo là checkpoint có val/loss thấp nhất -> có thể convert nhầm model tệ hơn.
+    best_info_path = f"{checkpoint_dir}/{BEST_CKPT_INFO_FILE}"
+    BEST_CHECKPOINT_PATH = None
+    if os.path.exists(best_info_path):
+        with open(best_info_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        candidate = info.get("best_model_path")
+        if candidate and os.path.exists(candidate):
+            BEST_CHECKPOINT_PATH = candidate
+            print("Dùng checkpoint tốt nhất theo val/loss (từ best_checkpoint.json):", BEST_CHECKPOINT_PATH)
 
-    BEST_CHECKPOINT_PATH = available_ckpts[-1]
+    if BEST_CHECKPOINT_PATH is None:
+        available_ckpts = sorted(glob.glob(f"{checkpoint_dir}/*.ckpt", recursive=True))
+        if not available_ckpts:
+            print(f"Không tìm thấy checkpoint nào trong {checkpoint_dir}!")
+            return
+        BEST_CHECKPOINT_PATH = available_ckpts[-1]
+        print(
+            "[WARN] Không tìm thấy best_checkpoint.json -- fallback về checkpoint mới nhất "
+            "theo tên file (có thể KHÔNG phải checkpoint có val/loss thấp nhất):",
+            BEST_CHECKPOINT_PATH,
+        )
+
     print("\nSẽ convert checkpoint:", BEST_CHECKPOINT_PATH)
 
     OPENAI_WHISPER_PT_PATH = f"{models_output_dir}/pt/whisper_vi{cfg.MODEL_NAME}_finetuned.pt"
@@ -268,6 +318,19 @@ def convert(cfg):
 
 
 if __name__ == "__main__":
+    # FIX: trước đây chọn chạy train hay convert bằng cách comment/uncomment dòng code,
+    # rất dễ quên bật lại train() khi thật sự cần train -> giờ dùng --mode tường minh.
+    parser = argparse.ArgumentParser(description="Whisper fine-tuning pipeline")
+    parser.add_argument(
+        "--mode",
+        choices=["train", "convert", "both"],
+        default="both",
+        help="train: chỉ chạy training | convert: chỉ convert checkpoint có sẵn | both: train rồi convert luôn",
+    )
+    args = parser.parse_args()
+
     cfg = Config()
-    whisper_train(cfg)
-    convert(cfg)
+    if args.mode in ("train", "both"):
+        whisper_train(cfg)
+    if args.mode in ("convert", "both"):
+        convert(cfg)
