@@ -3,9 +3,9 @@ import torch
 
 class Config:
     # --- Đường dẫn Dataset ---
-    CLEAN_DATASET_ROOT = "D:/cuong_stt/assets/dts_test/clean_dataset"
-    CLEAN_PROMPTS_FILE = "D:/cuong_stt/assets/dts_test/clean_dataset/spk01_prompts.txt"
-    NOISE_DATASET_ROOT = "D:/cuong_stt/assets/dts_test/noise_dataset"
+    CLEAN_DATASET_ROOT = "./assets/dts_test/clean_dataset"
+    CLEAN_PROMPTS_FILE = "./assets/dts_test/clean_dataset/spk01_prompts.txt"
+    NOISE_DATASET_ROOT = "./assets/dts_test/noise_dataset"
 
     # --- Đường dẫn Output ---
     ARTIFACTS_OUTPUT_DIR = "./module/whisper_train/artifacts"
