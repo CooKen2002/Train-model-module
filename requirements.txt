@@ -9,3 +9,5 @@ openai-whisper
 ctranslate2
 tqdm
 numpy
+ultralytics
+cv2

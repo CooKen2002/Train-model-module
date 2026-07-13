@@ -2,7 +2,7 @@ from ultralytics import YOLO
 import cv2
 
 # Load model
-model = YOLO('yolo26n-pose.pt')
+model = YOLO('./module/yolo/yolo26n-pose.pt')
 
 roi_x, roi_y, roi_w, roi_h = 0, 0, 200, 200
 cap = cv2.VideoCapture(0)
