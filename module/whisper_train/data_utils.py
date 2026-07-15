@@ -6,12 +6,15 @@ import torchaudio.transforms as at
 import soundfile as sf
 import whisper
 from tqdm import tqdm
+import torchaudio
 
 
 # Đọc file wav
 def load_wave(wave_path, sample_rate: int = 16000) -> torch.Tensor:
+    # print(wave_path)
     # Dùng soundfile thay vì torchaudio.load() để tránh lỗi thiếu DLL torchcodec trên Windows.
     data, sr = sf.read(wave_path, dtype="float32", always_2d=True)
+    # data, sr = torchaudio.load(wave_path)
     waveform = torch.from_numpy(data.T)
     if sample_rate != sr:
         waveform = at.Resample(sr, sample_rate)(waveform)
@@ -21,7 +24,7 @@ def load_wave(wave_path, sample_rate: int = 16000) -> torch.Tensor:
 # Trộn file âm thanh sạch với file tiếng nhiễu theo tỷ lệ (đo bằng $SNR$ - Tỷ lệ Tín hiệu trên Nhiễu).
 def mix_with_noise(
     clean: torch.Tensor, noise: torch.Tensor, snr_db: float, rng: random.Random
-) -> torch.Tensor:
+) -> torch.Tensor: 
     clean = clean.flatten()
     noise = noise.flatten()
     if len(noise) == 0:
@@ -38,7 +41,7 @@ def mix_with_noise(
         return clean
 
     scale = torch.sqrt((clean_power / (10 ** (snr_db / 10.0))) / noise_power)
-    mixed = clean + noise * scale
+    mixed = clean * random.uniform(0,1) + noise * scale
     peak = mixed.abs().max()
     if peak > 1.0:
         mixed = mixed / peak
@@ -61,33 +64,81 @@ def load_prompts(prompts_file):
             line = line.rstrip("\n")
             if not line.strip():
                 continue
-            audio_id, text = line.split(" ", 1)
+            audio_id, text = line.split("|")
             pairs.append((audio_id, text.strip()))
     return pairs
 
 
 # Khớp nối âm thanh với văn bản tương ứng và thực hiện bộ lọc dữ liệu thô ban đầu.
+# def get_clean_audio_transcript_pairs(
+#     prompts_file, dataset_root, text_max_len=200, audio_max_len=480000, sr=16000
+# ):
+#     audio_index = build_audio_index(dataset_root)
+#     print(audio_index[0])
+#     prompt_pairs = load_prompts(prompts_file)
+#     print(prompt_pairs[0])
+#     pairs = []
+#     missing = 0
+#     skipped_len = 0
+#     for audio_id, text in tqdm(prompt_pairs, desc="Loading clean dataset"):
+#         audio_path = audio_index.get(audio_id)
+#         if not audio_path:
+#             missing += 1
+#             continue
+#         if len(text) > text_max_len:
+#             skipped_len += 1
+#             continue
+#         audio = load_wave(audio_path, sample_rate=sr)[0]
+#         if len(audio) > audio_max_len:
+#             skipped_len += 1
+#             continue
+#         pairs.append((audio_id, audio_path, text))
+
+#     print(
+#         f"[CLEAN] Tổng dòng prompts: {len(prompt_pairs)} | Thiếu wav: {missing} | Bỏ do quá dài: {skipped_len} | Dùng được: {len(pairs)}"
+#     )
+#     return pairs
+
+def load_pair(prompts_file):
+    all_data = []
+    with open(prompts_file, 'r') as f:
+        data = f.readlines()
+    # print(data[:2])
+    for i in data:
+        splt = i.split("|")
+        # print(splt)
+        path_, text = splt[0], splt[1]
+        all_data.append([path_, text])
+        # break
+    return all_data
+    
 def get_clean_audio_transcript_pairs(
     prompts_file, dataset_root, text_max_len=200, audio_max_len=480000, sr=16000
 ):
-    audio_index = build_audio_index(dataset_root)
-    prompt_pairs = load_prompts(prompts_file)
+    prompt_pairs = load_pair(prompts_file)
     pairs = []
     missing = 0
     skipped_len = 0
-    for audio_id, text in tqdm(prompt_pairs, desc="Loading clean dataset"):
-        audio_path = audio_index.get(audio_id)
+    for audio_path, text in tqdm(prompt_pairs, desc="Loading clean dataset"): # MARK: [:10]
+        naudio_path = "/home/skysoft/share_folder/TuanNQ/1001/DTS/dolly/extracted/" + audio_path
+        # FIX: audio_id phải là string để split_clean_by_speaker tách được speaker
+        # (audio_id.split("_")[0]). Trước đó bị hardcode = 0 (int) -> crash.
+        # Format thực tế: "<speaker_id>/<uuid>.wav" (ví dụ "0/520aa164-....wav") -> UUID không
+        # mang thông tin speaker, nên lấy phần thư mục đầu (speaker_id) ghép với "_" để
+        # split("_")[0] ra đúng speaker, đồng thời vẫn giữ unique theo từng file.
+        speaker_id = Path(audio_path).parts[0] if "/" in audio_path else "0"
+        audio_id = f"{speaker_id}_{Path(audio_path).stem}"
         if not audio_path:
             missing += 1
             continue
         if len(text) > text_max_len:
             skipped_len += 1
             continue
-        audio = load_wave(audio_path, sample_rate=sr)[0]
+        audio = load_wave(naudio_path, sample_rate=sr)[0]
         if len(audio) > audio_max_len:
             skipped_len += 1
             continue
-        pairs.append((audio_id, audio_path, text))
+        pairs.append((audio_id, naudio_path, text))
 
     print(
         f"[CLEAN] Tổng dòng prompts: {len(prompt_pairs)} | Thiếu wav: {missing} | Bỏ do quá dài: {skipped_len} | Dùng được: {len(pairs)}"
@@ -155,7 +206,7 @@ def split_noise(noise_paths, train_rate=0.9, seed=3407):
 
 # Chuẩn bị dataset
 def prepare_datasets(cfg):
-    print("Đang chuẩn bị dữ liệu...")
+    print("Preparing dataset...")
     all_clean = get_clean_audio_transcript_pairs(
         cfg.CLEAN_PROMPTS_FILE,
         cfg.CLEAN_DATASET_ROOT,
@@ -214,10 +265,6 @@ class SpeechDataset(torch.utils.data.Dataset):
     # Xử lý dữ liệu thời gian thực khi nạp mẫu thứ idx
     def __getitem__(self, idx):
         audio_path, text = self.clean_pairs[idx]
-        # FIX: dùng CHUNG 1 nguồn rng cho toàn bộ quyết định ngẫu nhiên của sample này
-        # (trước đây khi deterministic=False, việc chọn offset noise trong mix_with_noise
-        # lại dùng random.Random() mới không seed -> 2 nguồn random khác nhau, không sai
-        # logic nhưng khó trace/khó tái tạo lại kết quả khi debug).
         rng = random.Random(self.seed + idx) if self.deterministic else random
         clean = load_wave(audio_path, sample_rate=self.sample_rate).flatten()
 
@@ -229,7 +276,7 @@ class SpeechDataset(torch.utils.data.Dataset):
                 clean,
                 noise,
                 rng.uniform(*self.snr_db_range),
-                rng,
+                rng if self.deterministic else random.Random(),
             )
         else:
             audio = clean
@@ -246,12 +293,6 @@ class SpeechDataset(torch.utils.data.Dataset):
 
 
 class WhisperDataCollatorWithPadding:
-    # FIX: nhận pad_token_id (tokenizer.eot) từ bên ngoài thay vì hardcode 50257.
-    # 50257 chỉ đúng với tokenizer multilingual gốc (tiny/base/small/medium); các bản
-    # large-v3 dùng vocab khác (~51866 token, thêm token timestamp mới) nên eot id khác.
-    def __init__(self, pad_token_id: int):
-        self.pad_token_id = pad_token_id
-
     def __call__(self, features):
         # Gộp các ảnh phổ âm thanh thành một khối Tensor duy nhất (input_ids)
         input_ids = torch.concat([f["input_ids"][None, :] for f in features])
@@ -266,9 +307,9 @@ class WhisperDataCollatorWithPadding:
             np.pad(l, (0, max_len - len(l)), "constant", constant_values=-100)
             for l in labels
         ]
-        # Ma trận đầu vào dec_input_ids, các vị trí thiếu sẽ được điền pad_token_id (tokenizer.eot)
+        # Ma trận đầu vào dec_input_ids, các vị trí thiếu sẽ được điền mã số 50257
         dec_input_ids = [
-            np.pad(d, (0, max_len - len(d)), "constant", constant_values=self.pad_token_id)
+            np.pad(d, (0, max_len - len(d)), "constant", constant_values=50257)
             for d in dec_input_ids
         ]
         # Ép toàn bộ các mảng dữ liệu đã được đệm thành các Tensor PyTorch chính thống để sẵn sàng đẩy thẳng lên GPU xử lý song song

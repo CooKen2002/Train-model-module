@@ -6,12 +6,21 @@ venv/
 .idea/              
 .DS_Store           
 Thumbs.db           
-*.ckpt
 
 module/yolo/runs/
 module/yolo/test/
 module/yolo/train/
 module/yolo/valid/
+data.yaml
+README.dataset.txt
+README.roboflow.txt
+
+*.wav
+module/whisper_train/artifacts/logs/*/**
+
+*.zip
 *.pt
-*.txt
-*.yaml
+*.ckpt
+*.json
+*.bin
+*.safetensors

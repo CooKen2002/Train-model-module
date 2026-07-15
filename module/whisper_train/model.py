@@ -1,16 +1,14 @@
-import sys
-from pathlib import Path
 import torch
 from torch import nn
 import whisper
-import evaluate
+# import evaluate
+
+import torchaudio.functional as F
+from torchmetrics.text import CharErrorRate
+
 from pytorch_lightning import LightningModule
 from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
-
-# FIX: cho phép import chạy đúng dù model.py được import từ cwd khác (vd: qua train.py
-# chạy từ repo root).
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import Config
 from data_utils import SpeechDataset, WhisperDataCollatorWithPadding
@@ -42,15 +40,15 @@ class WhisperModelModule(LightningModule):
         )
 
         # 4. ĐÓNG BĂNG ENCODER (Kỹ thuật mấu chốt)
-        for p in self.model.encoder.parameters():
-            p.requires_grad = False
+        # for p in self.model.encoder.parameters():
+        #     p.requires_grad = False
 
         # 5. Hàm tính lỗi (Loss Function)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
         # 6. Các độ đo đánh giá chất lượng
-        self.metrics_wer = evaluate.load("wer")
-        self.metrics_cer = evaluate.load("cer")
+        # self.metrics_wer = evaluate.load("wer")
+        self.metrics_cer = CharErrorRate()
 
         # Lưu trữ các tập đường dẫn dữ liệu để dùng cho DataLoader phía dưới
         self.__train_clean_pairs = train_clean_pairs
@@ -83,6 +81,7 @@ class WhisperModelModule(LightningModule):
         loss = self.loss_fn(out.view(-1, out.size(-1)), batch["labels"].long().view(-1))
 
         out_ids = torch.argmax(out, dim=2)
+        out_ids[out_ids == -100] = self.tokenizer.eot
         labels_for_decode = batch["labels"].long().clone()
         labels_for_decode[labels_for_decode == -100] = self.tokenizer.eot
 
@@ -90,14 +89,14 @@ class WhisperModelModule(LightningModule):
         l_list = [self.tokenizer.decode(l) for l in labels_for_decode]
 
         # Tính toán tỷ lệ sai chữ (CER) và sai từ (WER)
-        cer = self.metrics_cer.compute(references=l_list, predictions=o_list)
-        wer = self.metrics_wer.compute(references=l_list, predictions=o_list)
+        # cer = self.metrics_cer.compute(o_list,l_list)
+        # wer = F.word_error_rate(o_list,l_list)
 
         # log với on_epoch=True (mặc định của validation_step) để val/loss xuất hiện trong
         # callback_metrics ở cuối epoch -> ModelCheckpoint(monitor="val/loss") tìm thấy được.
         self.log("val/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("val/cer", cer, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("val/wer", wer, prog_bar=True, on_step=False, on_epoch=True)
+        # self.log("val/cer", cer, prog_bar=True, on_step=False, on_epoch=True)
+        # self.log("val/wer", wer, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -142,12 +141,10 @@ class WhisperModelModule(LightningModule):
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            # FIX: ép int tường minh thay vì để float ngầm định (num_train_epochs là float
-            # khi nhân vào, get_linear_schedule_with_warmup mong đợi num_training_steps là int).
-            self.t_total = int(
+            self.t_total = (
                 (len(self.__train_clean_pairs) // self.cfg.BATCH_SIZE)
                 // self.cfg.gradient_accumulation_steps
-                * self.cfg.num_train_epochs
+                * float(self.cfg.num_train_epochs)
             )
 
     def train_dataloader(self):
@@ -166,7 +163,7 @@ class WhisperModelModule(LightningModule):
             drop_last=True,
             shuffle=True,
             num_workers=self.cfg.num_worker,
-            collate_fn=WhisperDataCollatorWithPadding(pad_token_id=self.tokenizer.eot),
+            collate_fn=WhisperDataCollatorWithPadding(),
         )
 
     def val_dataloader(self):
@@ -183,5 +180,5 @@ class WhisperModelModule(LightningModule):
             dataset,
             batch_size=self.cfg.BATCH_SIZE,
             num_workers=self.cfg.num_worker,
-            collate_fn=WhisperDataCollatorWithPadding(pad_token_id=self.tokenizer.eot),
+            collate_fn=WhisperDataCollatorWithPadding(),
         )
